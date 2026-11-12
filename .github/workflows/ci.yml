@@ -1,0 +1,138 @@
+name: CI
+
+# Every push and pull request: fast checks on Linux, then a full simulator build of the app on the
+# Xcode 27 runner and the host (macOS) unit tests of the Ghostgram modules.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["**.md", "docs/**", ".github/ISSUE_TEMPLATE/**"]
+  pull_request:
+    paths-ignore: ["**.md", "docs/**", ".github/ISSUE_TEMPLATE/**"]
+  workflow_dispatch:
+    inputs:
+      continue_on_error:
+        description: Keep building after the first failing target (bazel --keep_going)
+        type: boolean
+        default: false
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Checks (strings, scripts, guards)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: String tools tests
+        run: python3 Ghostgram/Strings/tests/test_tools.py
+      - name: Strings are complete and the generated Swift is up to date
+        run: python3 Ghostgram/Strings/check.py --strict
+      - name: build-system tests
+        run: python3 -m unittest discover -s build-system/Make/tests
+      - name: Postbox import guard
+        run: python3 build-system/Make/PostboxImportCheck.py
+      - name: Shell scripts parse
+        run: |
+          for f in build-system/GG*.sh Ghostgram/Features/Vless/Core/*.sh; do
+            bash -n "$f" && echo "ok  $f"
+          done
+      - name: No configuration or signing material committed
+        run: |
+          bad=$(git ls-files build-system/ghostgram-configuration.json build-system/ghostgram-codesigning \
+                build-system/ghostgram-appstoreconnect.json '*.p8')
+          if [ -n "$bad" ]; then echo "::error::Committed secrets: $bad"; exit 1; fi
+
+  build:
+    name: Simulator build + host tests
+    needs: lint
+    runs-on: xcode-27
+    timeout-minutes: 360
+    env:
+      BAZEL_CACHE: /Users/runner/telegram-bazel-cache
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Prepare
+        id: prepare
+        uses: ./.github/actions/gg-prepare
+        with:
+          api-id: ${{ secrets.GG_API_ID }}
+          api-hash: ${{ secrets.GG_API_HASH }}
+          team-id: ${{ secrets.GG_TEAM_ID }}
+          signing-p12-base64: ${{ secrets.GG_SIGNING_P12_BASE64 }}
+          profiles-zip-base64: ${{ secrets.GG_PROFILES_ZIP_BASE64 }}
+
+      - name: Restore bazel cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.BAZEL_CACHE }}
+          key: bazel-sim-${{ steps.prepare.outputs.xcode-version }}-${{ hashFiles('MODULE.bazel.lock', 'versions.json') }}-${{ github.sha }}
+          restore-keys: |
+            bazel-sim-${{ steps.prepare.outputs.xcode-version }}-${{ hashFiles('MODULE.bazel.lock', 'versions.json') }}-
+            bazel-sim-${{ steps.prepare.outputs.xcode-version }}-
+
+      - name: Build (debug_sim_arm64)
+        env:
+          GG_BUILD_LOG: ${{ runner.temp }}/gg-build.log
+        run: |
+          EXTRA=()
+          if [ "${{ inputs.continue_on_error }}" = "true" ]; then EXTRA+=(--continueOnError); fi
+          build-system/GGBuild.sh "${EXTRA[@]}"
+
+      - name: Host unit tests (Ghostgram modules)
+        run: |
+          BAZEL="$(ls build-input/bazel-*-darwin-arm64 | head -1)"
+          "$BAZEL" test --test_output=errors \
+            //Ghostgram/GGCore:GGCoreTests \
+            //Ghostgram/GGSettingsUI:GGSettingsUIModelTests \
+            //Ghostgram/Features/Shared:GGFeaturesSharedTests \
+            //Ghostgram/Features/AntiDelete:GGAntiDeleteTests \
+            //Ghostgram/Features/Messages:GGMessagesTests \
+            //Ghostgram/Features/Appearance:GGAppearanceChoicesTests \
+            //Ghostgram/Features/Interface:GGAvatarCornersTests \
+            //Ghostgram/Features/CallsMedia:GGCallRecordingModeTests \
+            //Ghostgram/Features/RegDate:GGRegDateTests
+
+      - name: Collect the simulator app
+        if: success()
+        run: |
+          mkdir -p artifacts
+          cp bazel-bin/Telegram/Telegram.ipa artifacts/Ghostgram-simulator.ipa
+          echo "Install: unzip the .ipa and 'xcrun simctl install booted Payload/Telegram.app'" > artifacts/README.txt
+
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: Ghostgram-simulator-${{ github.sha }}
+          path: artifacts/
+          retention-days: 14
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: build-log-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/gg-build.log
+            bazel-testlogs/Ghostgram/**/test.log
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Save bazel cache
+        # One writer (main), so pull requests reuse it without evicting each other.
+        if: always() && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.BAZEL_CACHE }}
+          key: bazel-sim-${{ steps.prepare.outputs.xcode-version }}-${{ hashFiles('MODULE.bazel.lock', 'versions.json') }}-${{ github.sha }}

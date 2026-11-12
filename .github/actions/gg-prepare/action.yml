@@ -1,0 +1,143 @@
+name: Prepare Ghostgram build
+description: >
+  Frees disk space on the macOS runner, selects the Xcode pinned in versions.json, writes
+  build-system/ghostgram-configuration.json and the codesigning folder from secrets (or falls back to
+  build-system/fake-codesigning), and imports the signing certificates into a temporary keychain.
+
+inputs:
+  api-id:
+    description: Telegram api_id (my.telegram.org). Empty = a compile-only placeholder.
+    required: false
+    default: ""
+  api-hash:
+    description: Telegram api_hash (my.telegram.org). Empty = a compile-only placeholder.
+    required: false
+    default: ""
+  team-id:
+    description: Apple Team ID. Only used together with real signing.
+    required: false
+    default: ""
+  bundle-id:
+    description: Bundle id used with real signing.
+    required: false
+    default: org.ghostgram.app
+  signing-p12-base64:
+    description: Base64 of the signing certificate (.p12 exported with an EMPTY password).
+    required: false
+    default: ""
+  profiles-zip-base64:
+    description: Base64 of a zip with the .mobileprovision files of the app and every extension.
+    required: false
+    default: ""
+  free-disk:
+    description: Remove unused Xcodes, simulators and SDKs to make room for the build.
+    required: false
+    default: "true"
+
+outputs:
+  signing:
+    description: "real (secrets were provided) or fake (build-system/fake-codesigning)"
+    value: ${{ steps.config.outputs.signing }}
+  codesign-dir:
+    description: The codesigning folder to pass to the build scripts (GG_CODESIGN).
+    value: ${{ steps.config.outputs.codesign-dir }}
+  xcode-version:
+    description: The Xcode version that was selected.
+    value: ${{ steps.xcode.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - name: Select Xcode from versions.json
+      id: xcode
+      shell: bash
+      run: |
+        set -euo pipefail
+        VERSION="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["xcode"])' versions.json)"
+        APP="/Applications/Xcode_${VERSION}.app"
+        if [ ! -d "$APP" ]; then
+          echo "::error::Xcode $VERSION (versions.json) is not installed on this runner. Installed:"
+          ls -d /Applications/Xcode*.app || true
+          exit 1
+        fi
+        sudo xcode-select -s "$APP/Contents/Developer"
+        xcodebuild -version
+        echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+        echo "GG_XCODE_APP=$(cd "$APP" && pwd -P)" >> "$GITHUB_ENV"
+
+    - name: Free disk space
+      if: inputs.free-disk == 'true'
+      shell: bash
+      run: |
+        set -uo pipefail
+        echo "Before:"; df -h / | tail -1
+        KEEP="$GG_XCODE_APP"
+        for app in /Applications/Xcode*.app; do
+          real="$(cd "$app" 2>/dev/null && pwd -P)" || continue
+          if [ "$real" != "$KEEP" ]; then
+            sudo rm -rf "$app" || true
+          fi
+        done
+        # Toolchains and SDKs this build never uses.
+        sudo rm -rf ~/Library/Android /usr/local/share/dotnet ~/.dotnet ~/.ghcup \
+          /usr/local/lib/node_modules /Users/runner/hostedtoolcache/CodeQL 2>/dev/null || true
+        # Simulator runtimes: only the build (no tests on a simulator) runs here.
+        xcrun simctl delete unavailable 2>/dev/null || true
+        echo "After:"; df -h / | tail -1
+
+    - name: Write configuration and signing
+      id: config
+      shell: bash
+      env:
+        GG_API_ID: ${{ inputs.api-id }}
+        GG_API_HASH: ${{ inputs.api-hash }}
+        GG_TEAM_ID: ${{ inputs.team-id }}
+        GG_BUNDLE_ID: ${{ inputs.bundle-id }}
+        GG_P12: ${{ inputs.signing-p12-base64 }}
+        GG_PROFILES: ${{ inputs.profiles-zip-base64 }}
+      run: |
+        set -euo pipefail
+        CODESIGN="build-system/ghostgram-codesigning"
+        rm -rf "$CODESIGN"
+        if [ -n "$GG_P12" ] && [ -n "$GG_PROFILES" ] && [ -n "$GG_TEAM_ID" ]; then
+          SIGNING=real
+          mkdir -p "$CODESIGN/certs" "$CODESIGN/profiles"
+          printf '%s' "$GG_P12" | base64 --decode > "$CODESIGN/certs/distribution.p12"
+          TMP="$(mktemp -d)"
+          printf '%s' "$GG_PROFILES" | base64 --decode > "$TMP/profiles.zip"
+          unzip -q -j "$TMP/profiles.zip" '*.mobileprovision' -d "$CODESIGN/profiles"
+          rm -rf "$TMP"
+          BUNDLE_ID="$GG_BUNDLE_ID"
+          TEAM_ID="$GG_TEAM_ID"
+        else
+          # The fake profiles are issued for ph.telegra.Telegraph / C67CF9S4VU: the bundle id and team
+          # must match them, or Make.py finds no profile. Such a build is for CI and sideloading
+          # (re-signed by the installer), not for the App Store.
+          SIGNING=fake
+          cp -R build-system/fake-codesigning "$CODESIGN"
+          BUNDLE_ID="ph.telegra.Telegraph"
+          TEAM_ID="C67CF9S4VU"
+          echo "::notice::No signing secrets: using build-system/fake-codesigning (bundle id $BUNDLE_ID)."
+        fi
+        if [ -z "$GG_API_ID" ] || [ -z "$GG_API_HASH" ]; then
+          echo "::warning::GG_API_ID / GG_API_HASH secrets are not set: the build compiles but cannot log in."
+        fi
+        python3 -I - "$BUNDLE_ID" "$TEAM_ID" <<'PY'
+        import json, os, sys
+        bundle_id, team_id = sys.argv[1], sys.argv[2]
+        with open("build-system/ghostgram-configuration.example.json") as f:
+            config = json.load(f)
+        config["bundle_id"] = bundle_id
+        config["team_id"] = team_id
+        config["api_id"] = os.environ.get("GG_API_ID") or "0"
+        config["api_hash"] = os.environ.get("GG_API_HASH") or "0" * 32
+        with open("build-system/ghostgram-configuration.json", "w") as f:
+            json.dump(config, f, indent=1)
+        PY
+        echo "signing=$SIGNING" >> "$GITHUB_OUTPUT"
+        echo "codesign-dir=$CODESIGN" >> "$GITHUB_OUTPUT"
+        echo "GG_CODESIGN=$CODESIGN" >> "$GITHUB_ENV"
+
+    - name: Import certificates
+      shell: bash
+      run: python3 build-system/Make/ImportCertificates.py --path "$GG_CODESIGN/certs"
