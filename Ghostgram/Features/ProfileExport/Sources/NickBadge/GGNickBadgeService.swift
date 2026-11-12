@@ -47,6 +47,9 @@ final class GGNickBadgeService {
     static let purchaseWindow: Double = 30.0 * 60.0
     static let purchaseRecheckDelay: Double = 45.0
     static let defaultBot = "gconnectpay_bot"
+    /// Payment bots `v1/config` may name (lower-cased). The config is unsigned, so anything else
+    /// it names is ignored and `defaultBot` is used.
+    static let allowedBots: Set<String> = [GGNickBadgeService.defaultBot]
     private static let maxTableBytes = 8 * 1024 * 1024
 
     private struct CacheFile: Codable {

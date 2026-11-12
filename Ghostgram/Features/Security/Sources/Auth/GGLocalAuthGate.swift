@@ -103,6 +103,11 @@ final class GGLocalAuthGate {
         })
         if let controller {
             context.sharedContext.presentGlobalController(controller, nil)
+        } else {
+            // No keypad could be made: refuse, so `authenticate` finishes and clears `isRunning`
+            // (otherwise every later request would be refused until relaunch).
+            completed = true
+            completion(false)
         }
     }
 

@@ -202,6 +202,11 @@ struct GGNickBadgeServerConfig: Equatable {
         if let value = bot, value.isEmpty || !GGNickBadgeServerConfig.isUsername(value) {
             bot = nil
         }
+        // `v1/config` is not signed (only the badge table is), so a bot it names is a payment
+        // destination nobody vouched for: only the known payment bots are taken from it.
+        if let value = bot, !GGNickBadgeService.allowedBots.contains(value.lowercased()) {
+            bot = nil
+        }
         return GGNickBadgeServerConfig(bot: bot, standard: price("standard"), custom: price("custom"))
     }
 
