@@ -46,6 +46,26 @@ jobs:
           for f in build-system/GG*.sh Ghostgram/Features/Vless/Core/*.sh; do
             bash -n "$f" && echo "ok  $f"
           done
+      - name: Fake provisioning profiles have not expired
+        # rules_apple refuses an expired profile, simulator builds included (it bit on 2026-10-30).
+        run: |
+          python3 - <<'PY'
+          import datetime, glob, plistlib, subprocess, sys
+          now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+          failed = False
+          for path in sorted(glob.glob("build-system/fake-codesigning/profiles/*.mobileprovision")):
+              raw = subprocess.run(["openssl", "smime", "-inform", "DER", "-verify", "-noverify", "-in", path],
+                                   capture_output=True, check=True).stdout
+              expires = plistlib.loads(raw)["ExpirationDate"]
+              days = (expires - now).days
+              if days < 0:
+                  print(f"::error file={path}::expired on {expires:%Y-%m-%d}"); failed = True
+              elif days < 60:
+                  print(f"::warning file={path}::expires in {days} days ({expires:%Y-%m-%d})")
+              else:
+                  print(f"ok  {path}: {expires:%Y-%m-%d}")
+          sys.exit(1 if failed else 0)
+          PY
       - name: No configuration or signing material committed
         run: |
           bad=$(git ls-files build-system/ghostgram-configuration.json build-system/ghostgram-codesigning \
