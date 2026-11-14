@@ -111,10 +111,25 @@ jobs:
           if [ "${{ inputs.continue_on_error }}" = "true" ]; then EXTRA+=(--continueOnError); fi
           build-system/GGBuild.sh "${EXTRA[@]}"
 
+      # Right after the build, before the host tests: `bazel test` re-points the bazel-bin symlink at
+      # the host (macOS) configuration, where Telegram/Telegram.ipa does not exist.
+      - name: Collect the simulator app
+        run: |
+          mkdir -p artifacts
+          cp bazel-bin/Telegram/Telegram.ipa artifacts/Ghostgram-simulator.ipa
+          echo "Install: unzip the .ipa and 'xcrun simctl install booted Payload/Telegram.app'" > artifacts/README.txt
+
+      # Uploaded at once, so a later failing step does not throw away an hour-long build.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Ghostgram-simulator-${{ github.sha }}
+          path: artifacts/
+          retention-days: 14
+
       - name: Host unit tests (Ghostgram modules)
         run: |
           BAZEL="$(ls build-input/bazel-*-darwin-arm64 | head -1)"
-          "$BAZEL" test --test_output=errors \
+          "$BAZEL" test --test_output=errors --disk_cache="$BAZEL_CACHE" \
             //Ghostgram/GGCore:GGCoreTests \
             //Ghostgram/GGSettingsUI:GGSettingsUIModelTests \
             //Ghostgram/Features/Shared:GGFeaturesSharedTests \
@@ -124,20 +139,6 @@ jobs:
             //Ghostgram/Features/Interface:GGAvatarCornersTests \
             //Ghostgram/Features/CallsMedia:GGCallRecordingModeTests \
             //Ghostgram/Features/RegDate:GGRegDateTests
-
-      - name: Collect the simulator app
-        if: success()
-        run: |
-          mkdir -p artifacts
-          cp bazel-bin/Telegram/Telegram.ipa artifacts/Ghostgram-simulator.ipa
-          echo "Install: unzip the .ipa and 'xcrun simctl install booted Payload/Telegram.app'" > artifacts/README.txt
-
-      - uses: actions/upload-artifact@v4
-        if: success()
-        with:
-          name: Ghostgram-simulator-${{ github.sha }}
-          path: artifacts/
-          retention-days: 14
 
       - uses: actions/upload-artifact@v4
         if: failure()
