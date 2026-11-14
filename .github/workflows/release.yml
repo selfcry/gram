@@ -39,8 +39,8 @@ jobs:
     runs-on: xcode-27
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: Ghostgram/Features/Vless/Core/go/go.mod
           cache-dependency-path: Ghostgram/Features/Vless/Core/go/go.sum
@@ -50,7 +50,7 @@ jobs:
           sudo xcode-select -s "/Applications/Xcode_${VERSION}.app/Contents/Developer"
       - name: Build
         run: Ghostgram/Features/Vless/Core/build-core.sh --simulator --force
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: GGXrayCore
           path: Ghostgram/Features/Vless/Core/build/
@@ -66,7 +66,7 @@ jobs:
     env:
       BAZEL_CACHE: /Users/runner/telegram-bazel-cache
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
           fetch-depth: 0
@@ -83,7 +83,7 @@ jobs:
 
       - name: VLESS core
         if: needs.vpn-core.result == 'success'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: GGXrayCore
           path: Ghostgram/Features/Vless/Core/build/
@@ -100,7 +100,7 @@ jobs:
           echo "Ghostgram $APP_VERSION ($BUILD_NUMBER), signing: ${{ steps.prepare.outputs.signing }}"
 
       - name: Restore bazel cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ${{ env.BAZEL_CACHE }}
           key: bazel-release-${{ steps.prepare.outputs.xcode-version }}-${{ hashFiles('MODULE.bazel.lock', 'versions.json') }}-${{ github.sha }}
@@ -129,13 +129,13 @@ jobs:
           echo "RELEASE_NAME=$NAME" >> "$GITHUB_ENV"
           ls -la release
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ env.RELEASE_NAME }}
           path: release/
           retention-days: 30
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: release-build-log
@@ -173,7 +173,7 @@ jobs:
 
       - name: Save bazel cache
         if: always() && steps.prepare.outcome == 'success'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: ${{ env.BAZEL_CACHE }}
           key: bazel-release-${{ steps.prepare.outputs.xcode-version }}-${{ hashFiles('MODULE.bazel.lock', 'versions.json') }}-${{ github.sha }}

@@ -29,8 +29,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: String tools tests
@@ -80,7 +80,7 @@ jobs:
     env:
       BAZEL_CACHE: /Users/runner/telegram-bazel-cache
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
@@ -95,7 +95,7 @@ jobs:
           profiles-zip-base64: ${{ secrets.GG_PROFILES_ZIP_BASE64 }}
 
       - name: Restore bazel cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ${{ env.BAZEL_CACHE }}
           key: bazel-sim-${{ steps.prepare.outputs.xcode-version }}-${{ hashFiles('MODULE.bazel.lock', 'versions.json') }}-${{ github.sha }}
@@ -120,7 +120,7 @@ jobs:
           echo "Install: unzip the .ipa and 'xcrun simctl install booted Payload/Telegram.app'" > artifacts/README.txt
 
       # Uploaded at once, so a later failing step does not throw away an hour-long build.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Ghostgram-simulator-${{ github.sha }}
           path: artifacts/
@@ -140,7 +140,7 @@ jobs:
             //Ghostgram/Features/CallsMedia:GGCallRecordingModeTests \
             //Ghostgram/Features/RegDate:GGRegDateTests
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: build-log-${{ github.sha }}
@@ -153,7 +153,7 @@ jobs:
       - name: Save bazel cache
         # One writer (main), so pull requests reuse it without evicting each other.
         if: always() && github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: ${{ env.BAZEL_CACHE }}
           key: bazel-sim-${{ steps.prepare.outputs.xcode-version }}-${{ hashFiles('MODULE.bazel.lock', 'versions.json') }}-${{ github.sha }}
